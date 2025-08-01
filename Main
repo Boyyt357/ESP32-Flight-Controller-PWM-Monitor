@@ -1,0 +1,225 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <ArduinoJson.h>
+
+// --- WiFi AP Configuration ---
+// Set your desired network credentials for the Access Point.
+const char* ssid = "ESP32-PWM-Monitor";
+const char* password = "123password";
+
+// --- PWM Input Pin Configuration ---
+// Define the GPIO pins on the ESP32 that will read the PWM signals
+// from your flight controller.
+// Make sure these are not being used for other purposes.
+const int NUM_PINS = 4;
+const int PWM_PINS[NUM_PINS] = {25, 26, 27, 14}; // Example pins: replace with your actual pins
+volatile int pwmValues[NUM_PINS] = {0, 0, 0, 0}; // Volatile for thread safety
+
+// --- Web Server Setup ---
+WebServer server(80);
+
+// --- HTML Page Content ---
+// This is the HTML and JavaScript that will be served to the client.
+// It uses a simple layout and fetches data from the ESP32 to update the values.
+const char* htmlContent = R"rawliteral(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 PWM Monitor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f0f4f8;
+            color: #333;
+            text-align: center;
+            padding-top: 20px;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+        }
+        .pin-data {
+            display: flex;
+            justify-content: space-around;
+            flex-wrap: wrap;
+            margin-top: 20px;
+        }
+        .pin-card {
+            background-color: #ecf0f1;
+            padding: 15px;
+            margin: 10px;
+            border-radius: 8px;
+            width: 120px;
+        }
+        .pin-label {
+            font-size: 14px;
+            font-weight: bold;
+            color: #7f8c8d;
+        }
+        .pwm-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #3498db;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>PWM Monitor</h1>
+        <p>Connect to the "ESP32-PWM-Monitor" Wi-Fi network and open this page.</p>
+        <p>Reading PWM signals from pins:</p>
+        <div class="pin-data" id="pwm-data-container">
+            <!-- PWM cards will be generated here by JavaScript -->
+        </div>
+    </div>
+    <script>
+        // Array of pin numbers to display
+        const pins = [25, 26, 27, 14];
+
+        // Function to create a card for each pin
+        function createPwmCards() {
+            const container = document.getElementById('pwm-data-container');
+            pins.forEach(pin => {
+                const card = document.createElement('div');
+                card.className = 'pin-card';
+                card.innerHTML = `
+                    <div class="pin-label">GPIO${pin}</div>
+                    <div class="pwm-value" id="pin-value-${pin}">Waiting...</div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        // Function to fetch data from the ESP32 server
+        async function fetchPwmData() {
+            try {
+                const response = await fetch('/data');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                console.log('Received data:', data);
+
+                // Update the values on the web page
+                data.pwm.forEach((value, index) => {
+                    const pin = pins[index];
+                    const element = document.getElementById(`pin-value-${pin}`);
+                    if (element) {
+                        element.innerText = value;
+                    }
+                });
+            } catch (error) {
+                console.error('Fetch error:', error);
+            }
+        }
+
+        // Initialize the page and start fetching data
+        document.addEventListener('DOMContentLoaded', () => {
+            createPwmCards();
+            // Fetch data every 500ms (0.5 seconds)
+            setInterval(fetchPwmData, 500);
+        });
+    </script>
+</body>
+</html>
+)rawliteral";
+
+// --- Function Prototypes ---
+void handleRoot();
+void handleData();
+void setupWiFi();
+void readPwmSignals();
+
+// --- Arduino Setup Function ---
+void setup() {
+    Serial.begin(115200);
+    delay(10);
+    Serial.println("\nStarting ESP32 PWM Monitor...");
+
+    // Set PWM pins as input and attach interrupts
+    for (int i = 0; i < NUM_PINS; i++) {
+        pinMode(PWM_PINS[i], INPUT);
+    }
+    
+    // Setup WiFi Access Point
+    setupWiFi();
+
+    // Set up web server routes
+    server.on("/", handleRoot);
+    server.on("/data", handleData);
+
+    // Start the server
+    server.begin();
+    Serial.println("Web server started.");
+}
+
+// --- Arduino Loop Function ---
+void loop() {
+    // Handle incoming client requests
+    server.handleClient();
+
+    // Read the PWM signals in a non-blocking way
+    readPwmSignals();
+
+    delay(10); // Small delay to prevent blocking
+}
+
+// --- Function Implementations ---
+
+// Sets up the ESP32 as a WiFi Access Point
+void setupWiFi() {
+    Serial.printf("Setting up Access Point: %s\n", ssid);
+    WiFi.softAP(ssid, password);
+    IPAddress IP = WiFi.softAPIP();
+    Serial.print("AP IP address: ");
+    Serial.println(IP);
+}
+
+// Reads the PWM signals from the input pins using pulseIn()
+// Note: This approach can be blocking. For very fast signals or a large number of pins,
+// a timer-based interrupt approach would be more robust.
+void readPwmSignals() {
+    for (int i = 0; i < NUM_PINS; i++) {
+        // Read the pulse width in microseconds
+        // The ESP32's pulseIn() function is more reliable than on a standard Arduino
+        // for higher frequencies due to the faster processor.
+        pwmValues[i] = pulseIn(PWM_PINS[i], HIGH, 20000); // Timeout after 20ms (20,000 microseconds)
+    }
+}
+
+// Handles the root URL ("/") and serves the HTML page
+void handleRoot() {
+    server.send(200, "text/html", htmlContent);
+}
+
+// Handles the "/data" URL and sends the PWM values as a JSON object
+void handleData() {
+    // Use ArduinoJson to create a JSON response
+    DynamicJsonDocument doc(128);
+    JsonArray pwmArray = doc.createNestedArray("pwm");
+    
+    // Copy volatile values to a local array for safe processing
+    int currentPwmValues[NUM_PINS];
+    for (int i = 0; i < NUM_PINS; i++) {
+        currentPwmValues[i] = pwmValues[i];
+    }
+    
+    for (int i = 0; i < NUM_PINS; i++) {
+        pwmArray.add(currentPwmValues[i]);
+    }
+
+    String jsonResponse;
+    serializeJson(doc, jsonResponse);
+
+    server.send(200, "application/json", jsonResponse);
+}
