@@ -47,5 +47,5 @@ Connect the ground pin of the ESP32 to the ground pin of your flight controller.
 
 1. **Power On:** Power up both your flight controller and the ESP32.  
 2. **Connect to WiFi:** On your computer or phone, connect to the WiFi network created by the ESP32.  
-3. **Open the Web Interface:** Open a web browser and navigate to the IP address displayed in the Arduino Serial Monitor.  
+3. **Open the Web Interface:** Open a web browser and navigate to the IP address (http://192.168.4.1) displayed in the Arduino Serial Monitor.  
 4. You will now see the live PWM values from your flight controller displayed on the web page. This is useful for troubleshooting throttle calibration, signal jitter, or other ESC-related issues.
